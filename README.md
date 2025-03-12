@@ -5,7 +5,7 @@ In this project, I will be attempting to code a Interpreter for Ruby in Java. My
 
 # The workings of the code:
 
--Lexer: Converts input into tokens.
+- Lexer: Converts input into tokens.
 - Parser: Builds an AST from tokens.
 - AST Classes: Represents different types of statements and expressions.
 - Interpreter (Visitor): Executes parsed statements.
