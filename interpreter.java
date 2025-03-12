@@ -2,7 +2,7 @@ import java.io.*;
 import java.util.*;
 
 enum TokenType {
-    NUMBER, IDENTIFIER, ASSIGN, PLUS, MINUS, MULT, DIV, LPAREN, RPAREN, PRINT, END, UNKNOWN
+    NUMBER, IDENTIFIER, ASSIGN, PLUS, MINUS, MULT, DIV, LPAREN, RPAREN, PRINT, END, IF, ELSE, THEN, ENDIF, LT, GT, EQ, UNKNOWN
 }
 
 class Token {
@@ -50,10 +50,12 @@ class Lexer {
                     identifier.append(advance());
                 }
                 String text = identifier.toString();
-                if (text.equals("print")) {
-                    tokens.add(new Token(TokenType.PRINT, text));
-                } else {
-                    tokens.add(new Token(TokenType.IDENTIFIER, text));
+                switch (text) {
+                    case "print" -> tokens.add(new Token(TokenType.PRINT, text));
+                    case "if" -> tokens.add(new Token(TokenType.IF, text));
+                    case "else" -> tokens.add(new Token(TokenType.ELSE, text));
+                    case "end" -> tokens.add(new Token(TokenType.ENDIF, text));
+                    default -> tokens.add(new Token(TokenType.IDENTIFIER, text));
                 }
             } else {
                 switch (current) {
@@ -64,6 +66,8 @@ class Lexer {
                     case '/' -> tokens.add(new Token(TokenType.DIV, "/"));
                     case '(' -> tokens.add(new Token(TokenType.LPAREN, "("));
                     case ')' -> tokens.add(new Token(TokenType.RPAREN, ")"));
+                    case '<' -> tokens.add(new Token(TokenType.LT, "<"));
+                    case '>' -> tokens.add(new Token(TokenType.GT, ">"));
                     default -> tokens.add(new Token(TokenType.UNKNOWN, String.valueOf(current)));
                 }
                 advance();
@@ -76,24 +80,25 @@ class Lexer {
 
 abstract class ASTNode {}
 
+class BinaryOp extends ASTNode {
+    ASTNode left, right;
+    TokenType operator;
+
+    BinaryOp(ASTNode left, TokenType operator, ASTNode right) {
+        this.left = left;
+        this.operator = operator;
+        this.right = right;
+    }
+}
+
 class NumberNode extends ASTNode {
     int value;
     NumberNode(int value) { this.value = value; }
 }
 
-class VariableNode extends ASTNode {
+class VarNode extends ASTNode {
     String name;
-    VariableNode(String name) { this.name = name; }
-}
-
-class BinaryOpNode extends ASTNode {
-    ASTNode left, right;
-    TokenType operator;
-    BinaryOpNode(ASTNode left, TokenType operator, ASTNode right) {
-        this.left = left;
-        this.operator = operator;
-        this.right = right;
-    }
+    VarNode(String name) { this.name = name; }
 }
 
 class AssignNode extends ASTNode {
@@ -110,95 +115,103 @@ class PrintNode extends ASTNode {
     PrintNode(ASTNode value) { this.value = value; }
 }
 
+class IfNode extends ASTNode {
+    ASTNode condition;
+    List<ASTNode> trueBranch, falseBranch;
+    IfNode(ASTNode condition, List<ASTNode> trueBranch, List<ASTNode> falseBranch) {
+        this.condition = condition;
+        this.trueBranch = trueBranch;
+        this.falseBranch = falseBranch;
+    }
+}
+
 class Parser {
     private List<Token> tokens;
-    private int pos;
+    private int pos = 0;
 
     Parser(List<Token> tokens) {
         this.tokens = tokens;
-        this.pos = 0;
     }
 
-    private Token consume() {
-        return tokens.get(pos++);
+    private Token eat(TokenType type) {
+        if (pos < tokens.size() && tokens.get(pos).type == type) {
+            return tokens.get(pos++);
+        }
+        throw new RuntimeException("Unexpected token: " + tokens.get(pos));
     }
 
-    private Token peek() {
-        return tokens.get(pos);
-    }
-
-    ASTNode parseExpression() {
-        Token token = consume();
+    private ASTNode factor() {
+        Token token = tokens.get(pos++);
         if (token.type == TokenType.NUMBER) {
             return new NumberNode(Integer.parseInt(token.value));
         } else if (token.type == TokenType.IDENTIFIER) {
-            return new VariableNode(token.value);
-        } else {
-            throw new RuntimeException("Unexpected token: " + token.value);
+            return new VarNode(token.value);
         }
+        throw new RuntimeException("Unexpected token in factor: " + token);
     }
 
-    ASTNode parseStatement() {
-        Token token = peek();
-        if (token.type == TokenType.PRINT) {
-            consume();
-            return new PrintNode(parseExpression());
-        } else if (token.type == TokenType.IDENTIFIER) {
-            consume();
-            Token assign = consume();
-            if (assign.type == TokenType.ASSIGN) {
-                return new AssignNode(token.value, parseExpression());
+    private ASTNode expression() {
+        ASTNode left = factor();
+        while (pos < tokens.size() && (tokens.get(pos).type == TokenType.PLUS || tokens.get(pos).type == TokenType.MINUS)) {
+            TokenType operator = tokens.get(pos++).type;
+            ASTNode right = factor();
+            left = new BinaryOp(left, operator, right);
+        }
+        return left;
+    }
+
+    public List<ASTNode> program() {
+        List<ASTNode> statements = new ArrayList<>();
+        while (tokens.get(pos).type != TokenType.END) {
+            Token token = tokens.get(pos);
+            if (token.type == TokenType.IF) {
+                eat(TokenType.IF);
+                ASTNode condition = expression();
+                List<ASTNode> trueBranch = program();
+                List<ASTNode> falseBranch = new ArrayList<>();
+                if (tokens.get(pos).type == TokenType.ELSE) {
+                    eat(TokenType.ELSE);
+                    falseBranch = program();
+                }
+                eat(TokenType.ENDIF);
+                statements.add(new IfNode(condition, trueBranch, falseBranch));
+            } else if (token.type == TokenType.PRINT) {
+                eat(TokenType.PRINT);
+                statements.add(new PrintNode(expression()));
+            } else {
+                String varName = eat(TokenType.IDENTIFIER).value;
+                eat(TokenType.ASSIGN);
+                statements.add(new AssignNode(varName, expression()));
             }
         }
-        throw new RuntimeException("Invalid statement");
+        return statements;
     }
 }
 
 class Interpreter {
     private Map<String, Integer> variables = new HashMap<>();
 
-    void interpret(ASTNode node) {
-        if (node instanceof NumberNode numNode) {
-            System.out.println(numNode.value);
-        } else if (node instanceof VariableNode varNode) {
-            System.out.println(variables.getOrDefault(varNode.name, 0));
-        } else if (node instanceof BinaryOpNode binNode) {
-            int left = evaluate(binNode.left);
-            int right = evaluate(binNode.right);
-            switch (binNode.operator) {
-                case PLUS -> System.out.println(left + right);
-                case MINUS -> System.out.println(left - right);
-                case MULT -> System.out.println(left * right);
-                case DIV -> System.out.println(left / right);
+    void execute(List<ASTNode> ast) {
+        for (ASTNode node : ast) {
+            if (node instanceof AssignNode assignNode) {
+                variables.put(assignNode.name, evaluate(assignNode.value));
+            } else if (node instanceof PrintNode printNode) {
+                System.out.println(evaluate(printNode.value));
             }
-        } else if (node instanceof AssignNode assignNode) {
-            variables.put(assignNode.name, evaluate(assignNode.value));
-        } else if (node instanceof PrintNode printNode) {
-            System.out.println(evaluate(printNode.value));
         }
     }
 
     private int evaluate(ASTNode node) {
-        if (node instanceof NumberNode numNode) {
-            return numNode.value;
-        } else if (node instanceof VariableNode varNode) {
+        if (node instanceof NumberNode numberNode) {
+            return numberNode.value;
+        } else if (node instanceof VarNode varNode) {
             return variables.getOrDefault(varNode.name, 0);
-        } else if (node instanceof BinaryOpNode binNode) {
-            int left = evaluate(binNode.left);
-            int right = evaluate(binNode.right);
-            return switch (binNode.operator) {
-                case PLUS -> left + right;
-                case MINUS -> left - right;
-                case MULT -> left * right;
-                case DIV -> left / right;
-                default -> 0;
-            };
         }
-        return 0;
+        throw new RuntimeException("Unknown expression");
     }
 }
 
-public class interpreter {
+public class Main {
     public static void main(String[] args) {
         if (args.length < 1) {
             System.out.println("Usage: java Main <filename>");
@@ -221,8 +234,8 @@ public class interpreter {
         Lexer lexer = new Lexer(code.toString());
         List<Token> tokens = lexer.tokenize();
         Parser parser = new Parser(tokens);
-        ASTNode ast = parser.parseStatement();
+        List<ASTNode> ast = parser.program();
         Interpreter interpreter = new Interpreter();
-        interpreter.interpret(ast);
+        interpreter.execute(ast);
     }
 }
